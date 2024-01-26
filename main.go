@@ -43,7 +43,7 @@ func main() {
 	)
 
 	flag.StringVar(&name, "key", "", "name or path of the key to use (defaults to generating a new one)")
-	flag.StringVar(&clientCert, "cert", "", "path to the certificate to use (defaults to automatically generating one")
+	flag.StringVar(&clientCert, "cert", "", "path to the certificate to use (defaults to automatically generating one)")
 	flag.StringVar(&device, "device", "", "TPM device name to use (defaults to automatic detection)")
 	flag.StringVar(&storageDirectory, "storage-directory", filepath.Join(".", ".tpmkeys"), "storage directory to use")
 	flag.BoolVar(&forceTSS2, "tss2", false, "force (re)load key using TSS2 format")
@@ -64,6 +64,7 @@ func main() {
 	// random name, and create the key in the TPMKMS.
 	ctx := context.Background()
 	var signer crypto.Signer
+	var certChain []*x509.Certificate
 	_, statErr := os.Stat(name)
 	keyFileExists := statErr == nil
 	switch {
@@ -132,6 +133,15 @@ func main() {
 		})
 		fatalIf(err)
 
+		if kc, ok := k.(apiv1.CertificateChainManager); ok {
+			chain, err := kc.LoadCertificateChain(&apiv1.LoadCertificateChainRequest{
+				Name: keyName,
+			})
+			if err == nil {
+				certChain = chain
+			}
+		}
+
 		if forceTSS2 {
 			log.Println("transforming TPM key backed by TPMKMS to TSS2 key")
 			tpmKey, err := t.GetKey(ctx, name)
@@ -149,32 +159,35 @@ func main() {
 		}
 	}
 
-	// read client certificate (chain), or generate using a temporary CA
-	var certChain []*x509.Certificate
-	if clientCert == "" {
-		log.Println("generating new client certificate for TPM key")
-		ca, err := minica.New(
-			minica.WithName("TPM Test"),
-		)
-		fatalIf(err)
+	// a certificate chain can be available, if loaded from the TPMKMS, but if
+	// there's no certificate (chain) yet, try to create one either from the client
+	// certificate file or using a temporary CA
+	if len(certChain) == 0 {
+		if clientCert == "" {
+			log.Println("generating new client certificate for TPM key")
+			ca, err := minica.New(
+				minica.WithName("TPM Test"),
+			)
+			fatalIf(err)
 
-		template := &x509.Certificate{
-			PublicKey: signer.Public(),
-			Subject: pkix.Name{
-				CommonName: "Test Client",
-			},
-			NotBefore: time.Now().Add(-1 * time.Minute),
-			NotAfter:  time.Now().Add(60 * time.Minute),
+			template := &x509.Certificate{
+				PublicKey: signer.Public(),
+				Subject: pkix.Name{
+					CommonName: "Test Client",
+				},
+				NotBefore: time.Now().Add(-1 * time.Minute),
+				NotAfter:  time.Now().Add(60 * time.Minute),
+			}
+
+			cert, err := ca.Sign(template)
+			fatalIf(err)
+
+			certChain = []*x509.Certificate{cert, ca.Intermediate}
+		} else {
+			log.Printf("reading client certificate (chain) for TPM key from %q\n", clientCert)
+			certChain, err = pemutil.ReadCertificateBundle(clientCert)
+			fatalIf(err)
 		}
-
-		cert, err := ca.Sign(template)
-		fatalIf(err)
-
-		certChain = []*x509.Certificate{cert, ca.Intermediate}
-	} else {
-		log.Printf("reading client certificate (chain) for TPM key from %q\n", clientCert)
-		certChain, err = pemutil.ReadCertificateBundle(clientCert)
-		fatalIf(err)
 	}
 
 	if len(certChain) == 0 {
