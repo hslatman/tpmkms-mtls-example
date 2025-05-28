@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/smallstep/certinfo"
@@ -32,6 +33,7 @@ import (
 func main() {
 	var (
 		name             string
+		keyType          string
 		clientCert       string
 		device           string
 		storageDirectory string
@@ -43,6 +45,7 @@ func main() {
 	)
 
 	flag.StringVar(&name, "key", "", "name or path of the key to use (defaults to generating a new one)")
+	flag.StringVar(&keyType, "kty", "RSA", "key type (RSA or EC)")
 	flag.StringVar(&clientCert, "cert", "", "path to the certificate to use (defaults to automatically generating one)")
 	flag.StringVar(&device, "device", "", "TPM device name to use (defaults to automatic detection)")
 	flag.StringVar(&storageDirectory, "storage-directory", filepath.Join(".", ".tpmkeys"), "storage directory to use")
@@ -120,10 +123,16 @@ func main() {
 		}); err != nil {
 			if !errors.Is(err, tpm.ErrExists) {
 				log.Printf("key %q does not exist in TPMKMS storage %q; creating new one\n", name, storageDirectory)
+				signatureAlgorithm := apiv1.SHA256WithRSA
+				bits := 2048
+				if strings.HasPrefix(strings.ToUpper(keyType), "EC") {
+					signatureAlgorithm = apiv1.ECDSAWithSHA256
+					bits = 0
+				}
 				_, err := k.CreateKey(&apiv1.CreateKeyRequest{
 					Name:               keyName,
-					SignatureAlgorithm: apiv1.SHA256WithRSA,
-					Bits:               2048,
+					SignatureAlgorithm: signatureAlgorithm,
+					Bits:               bits,
 				})
 				fatalIf(err)
 			}

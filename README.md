@@ -33,6 +33,8 @@ Usage of tpmkms-mtls-example:
     	TPM device name to use (defaults to automatic detection)
   -key string
     	name or path of the key to use (defaults to generating a new one)
+  -kty string
+    	key type (RSA or EC) (default "RSA")
   -roots string
     	path to file with (additional) trusted root CA certificates (defaults to system trust store)
   -storage-directory string
